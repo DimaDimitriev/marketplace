@@ -1,0 +1,165 @@
+services:
+  consul:
+    image: hashicorp/consul:1.18
+    container_name: consul
+    command: "agent -dev -client=0.0.0.0"
+    ports:
+      - "8500:8500"
+    healthcheck:
+      test: ["CMD", "consul", "members"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  auth-service:
+    build: .
+    container_name: auth-service
+    command: uvicorn main:app --host 0.0.0.0 --port 8001
+    working_dir: /app/Auth-service
+    ports:
+      - "8001:8001"
+    environment:
+      PORT: 8001
+      CONSUL_HOST: consul
+      CONSUL_PORT: 8500
+      INSTANCE_HOST: auth-service
+      JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-key-minimum-32-chars-long}
+    depends_on:
+      consul:
+        condition: service_healthy
+
+  catalog-1:
+    build: .
+    container_name: catalog-1
+    command: uvicorn main:app --host 0.0.0.0 --port 8002
+    working_dir: /app/Catalog-service
+    ports:
+      - "8002:8002"
+    environment:
+      PORT: 8002
+      CONSUL_HOST: consul
+      CONSUL_PORT: 8500
+      INSTANCE_ID: catalog-1
+    depends_on:
+      consul:
+        condition: service_healthy
+
+  catalog-2:
+    build: .
+    container_name: catalog-2
+    command: uvicorn main:app --host 0.0.0.0 --port 8002
+    working_dir: /app/Catalog-service
+    ports:
+      - "8012:8002"
+    environment:
+      PORT: 8002
+      CONSUL_HOST: consul
+      CONSUL_PORT: 8500
+      INSTANCE_ID: catalog-2
+    depends_on:
+      consul:
+        condition: service_healthy
+
+  order-service:
+    build: .
+    container_name: order-service
+    command: uvicorn main:app --host 0.0.0.0 --port 8003
+    working_dir: /app/Order-service
+    ports:
+      - "8003:8003"
+    environment:
+      PORT: 8003
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      CONSUL_HOST: consul
+      CONSUL_PORT: 8500
+      INSTANCE_HOST: order-service
+    depends_on:
+      consul:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  payment-service:
+    build: .
+    container_name: payment-service
+    command: uvicorn main:app --host 0.0.0.0 --port 8004
+    working_dir: /app/Payment-service
+    ports:
+      - "8004:8004"
+    environment:
+      PORT: 8004
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      CONSUL_HOST: consul
+      CONSUL_PORT: 8500
+      INSTANCE_HOST: payment-service
+      PAYMENT_LIMIT: ${PAYMENT_LIMIT:-1500}
+    depends_on:
+      consul:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  notification-service:
+    build: .
+    container_name: notification-service
+    command: uvicorn main:app --host 0.0.0.0 --port 8005
+    working_dir: /app/Notification-service
+    ports:
+      - "8005:8005"
+    environment:
+      PORT: 8005
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      CONSUL_HOST: consul
+      CONSUL_PORT: 8500
+      INSTANCE_HOST: notification-service
+      JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-key-minimum-32-chars-long}
+    depends_on:
+      consul:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  graphql-gateway:
+    build: .
+    container_name: graphql-gateway
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    working_dir: /app/graphql-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      PORT: 8000
+      CONSUL_HOST: consul
+      CONSUL_PORT: 8500
+      INSTANCE_HOST: graphql-gateway
+      JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-key-minimum-32-chars-long}
+    depends_on:
+      consul:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:alpine
+    container_name: nginx-gateway
+    ports:
+      - "80:80"
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - graphql-gateway
+      - auth-service
+      - catalog-1
+      - catalog-2
+      - order-service
+      - payment-service
+      - notification-service
